@@ -59,9 +59,19 @@ impl Client {
 		let model = target.model.clone();
 
 		let mut web_request_data =
-			AdapterDispatcher::to_web_request_data(target, ServiceType::Chat, chat_req, options_set.clone())?;
+			AdapterDispatcher::to_web_request_data(target.clone(), ServiceType::Chat, chat_req, options_set.clone())?;
 
-		// Add custom headers from options_set
+		let auth_data = target.auth;
+		if let AuthData::RequestOverride {
+			url: override_url,
+			headers: override_headers,
+		} = auth_data
+		{
+			web_request_data.url = override_url;
+			web_request_data.headers = override_headers;
+		}
+
+		// Add custom headers from options_set (merged after eventual RequestOverride)
 		if let Some(custom_headers) = options_set.headers() {
 			web_request_data.headers.extend(custom_headers);
 		}
@@ -105,11 +115,6 @@ impl Client {
 		let mut web_request_data =
 			AdapterDispatcher::to_web_request_data(target, ServiceType::ChatStream, chat_req, options_set.clone())?;
 
-		// Add custom headers from options_set
-		if let Some(custom_headers) = options_set.headers() {
-			web_request_data.headers.extend(custom_headers);
-		}
-
 		if let AuthData::RequestOverride {
 			url: override_url,
 			headers: override_headers,
@@ -119,21 +124,36 @@ impl Client {
 			web_request_data.headers = override_headers;
 		};
 
+		// Add custom headers from options_set
+		if let Some(custom_headers) = options_set.headers() {
+			web_request_data.headers.extend(custom_headers);
+		}
+
 		let reqwest_builder = self
 			.web_client()
 			.new_req_builder(&web_request_data.url, &web_request_data.headers, web_request_data.payload)
-			.map_err(|webc_error| match webc_error {
-				crate::webc::Error::ResponseFailedRateLimit { .. } => Error::WebModelRateLimit {
-					model_iden: model.clone(),
-					webc_error,
-				},
-				_ => Error::WebModelCall {
-					model_iden: model.clone(),
-					webc_error,
-				},
+			.map_err(|webc_error| Error::WebModelCall {
+				model_iden: model.clone(),
+				webc_error,
 			})?;
 
-		let res = AdapterDispatcher::to_chat_stream(model, reqwest_builder, options_set)?;
+		let res = AdapterDispatcher::to_chat_stream(model.clone(), reqwest_builder, options_set).map_err(|e| {
+			if let Error::ReqwestEventSource(ref es_err) = e {
+				if let reqwest_eventsource::Error::InvalidStatusCode(status) = **es_err {
+					if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+						return Error::WebModelRateLimit {
+							model_iden: model.clone(),
+							// Note: Here we don't have the body/headers for webc::Error easily from RequestEventSource error
+							webc_error: crate::webc::Error::ResponseFailedRateLimit {
+								body: String::new(),
+								headers: Box::default(),
+							},
+						};
+					}
+				}
+			}
+			e
+		})?;
 
 		Ok(res)
 	}
