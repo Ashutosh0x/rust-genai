@@ -1,4 +1,4 @@
-use crate::adapter::{AdapterDispatcher, AdapterKind, ServiceType, WebRequestData};
+use crate::adapter::{AdapterDispatcher, AdapterKind, ServiceType};
 use crate::chat::{ChatOptions, ChatOptionsSet, ChatRequest, ChatResponse, ChatStreamResponse};
 use crate::resolver::AuthData;
 use crate::{Client, Error, ModelIden, Result, ServiceTarget};
@@ -139,7 +139,7 @@ impl Client {
 
 		let res = AdapterDispatcher::to_chat_stream(model.clone(), reqwest_builder, options_set).map_err(|e| {
 			if let Error::ReqwestEventSource(ref es_err) = e {
-				if let reqwest_eventsource::Error::InvalidStatusCode(status) = **es_err {
+				if let reqwest_eventsource::Error::InvalidStatusCode(status, _) = **es_err {
 					if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
 						return Error::WebModelRateLimit {
 							model_iden: model.clone(),
